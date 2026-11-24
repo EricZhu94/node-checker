@@ -16,9 +16,9 @@ import requests
 TARGET_COUNTRIES = {"US", "JP", "KR", "CA", "AU", "IN"}
 PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://")
 MAX_GITHUB_REPOS = 20
-MAX_CANDIDATE_NODES = 300
-TCP_WORKERS = 50
-XRAY_WORKERS = 20
+MAX_CANDIDATE_NODES = 10000
+TCP_WORKERS = 100
+XRAY_WORKERS = 40
 REQUEST_TIMEOUT = 10
 
 _port_lock = threading.Lock()
@@ -197,7 +197,7 @@ def build_outbound(node_uri: str) -> dict | None:
             stream = {"network": net}
             if tls == "tls":
                 stream["security"] = "tls"
-                stream["tlsSettings"] = {"serverName": cfg.get("sni") or cfg.get("host") or cfg.get("add"), "allowInsecure": True}
+                stream["tlsSettings"] = {"serverName": cfg.get("sni") or cfg.get("host") or cfg.get("add"), "allowInsecure": False}
             if net == "ws":
                 stream["wsSettings"] = {"path": cfg.get("path", "/"), "headers": {"Host": cfg.get("host", "")}}
             elif net == "grpc":
@@ -222,7 +222,7 @@ def build_outbound(node_uri: str) -> dict | None:
             stream: dict = {"network": net}
             if sec == "tls":
                 stream["security"] = "tls"
-                stream["tlsSettings"] = {"serverName": qs.get("sni", [u.hostname])[0], "allowInsecure": True}
+                stream["tlsSettings"] = {"serverName": qs.get("sni", [u.hostname])[0], "allowInsecure": False}
             elif sec == "reality":
                 stream["security"] = "reality"
                 stream["realitySettings"] = {
@@ -253,7 +253,7 @@ def build_outbound(node_uri: str) -> dict | None:
             stream = {
                 "network": net,
                 "security": "tls",
-                "tlsSettings": {"serverName": qs.get("sni", [u.hostname])[0], "allowInsecure": True},
+                "tlsSettings": {"serverName": qs.get("sni", [u.hostname])[0], "allowInsecure": False},
             }
             if net == "ws":
                 stream["wsSettings"] = {"path": qs.get("path", ["/"])[0], "headers": {"Host": qs.get("host", [u.hostname])[0]}}
@@ -287,6 +287,18 @@ def build_outbound(node_uri: str) -> dict | None:
     return None
 
 
+def tag_node_uri(node_uri: str, remark_text: str) -> str:
+    if node_uri.startswith("vmess://"):
+        try:
+            cfg = json.loads(b64_decode_safe(node_uri[len("vmess://"):]))
+            cfg["ps"] = remark_text
+            encoded = base64.b64encode(json.dumps(cfg, ensure_ascii=False).encode("utf-8")).decode("utf-8")
+            return f"vmess://{encoded}"
+        except Exception:
+            pass
+    return f"{node_uri}#{quote(remark_text)}"
+
+
 def test_node_with_xray(node_uri: str, xray_bin: str) -> tuple[str, int] | None:
     outbound = build_outbound(node_uri)
     if not outbound:
@@ -311,7 +323,7 @@ def test_node_with_xray(node_uri: str, xray_bin: str) -> tuple[str, int] | None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        time.sleep(0.8)
+        time.sleep(0.5)
         if proc.poll() is not None:
             return None
 
@@ -369,8 +381,8 @@ def test_node_with_xray(node_uri: str, xray_bin: str) -> tuple[str, int] | None:
             if api_probe.status_code not in (200, 400, 403):
                 return None
 
-        remark = quote(f"[{tag_prefix} | {loc} | {latency_ms}ms]")
-        tagged_uri = f"{node_uri}#{remark}"
+        remark_text = f"[{tag_prefix} | {loc} | {latency_ms}ms]"
+        tagged_uri = tag_node_uri(node_uri, remark_text)
         return tagged_uri, latency_ms
     except Exception:
         return None
